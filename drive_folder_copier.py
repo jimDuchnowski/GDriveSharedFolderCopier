@@ -35,13 +35,14 @@ def get_google_drive_service():
 
     return build('drive', 'v3', credentials=creds)
 
-def copy_folder(service, source_folder_id, parent_id=None):
+def copy_folder(service, source_folder_id, parent_id=None, is_root=True):
     """
     Recursively copies a folder and its contents.
     Args:
         service: Google Drive API service instance
         source_folder_id: ID of the folder to copy
         parent_id: ID of the parent folder to copy to (optional)
+        is_root: Whether this is the root/top-level folder being copied
     Returns:
         ID of the new folder
     """
@@ -52,7 +53,7 @@ def copy_folder(service, source_folder_id, parent_id=None):
         
         # Create new folder
         new_folder = {
-            'name': f"Copy of {folder_metadata['name']}",
+            'name': f"Copy of {folder_metadata['name']}" if is_root else folder_metadata['name'],
             'mimeType': 'application/vnd.google-apps.folder'
         }
         if parent_id:
@@ -71,8 +72,8 @@ def copy_folder(service, source_folder_id, parent_id=None):
         # Copy each item in the folder
         for item in items:
             if item['mimeType'] == 'application/vnd.google-apps.folder':
-                # Recursively copy subfolder
-                copy_folder(service, item['id'], new_folder_id)
+                # Recursively copy subfolder (with is_root=False)
+                copy_folder(service, item['id'], new_folder_id, is_root=False)
             else:
                 # Copy file
                 copied_file = {
