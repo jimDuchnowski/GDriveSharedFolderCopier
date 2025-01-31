@@ -2,14 +2,20 @@
 
 import os
 import pickle
+import time
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+from googleapiclient.http import MediaIoBaseDownload
 
 # If modifying these scopes, delete the token.pickle file.
 SCOPES = ['https://www.googleapis.com/auth/drive']
+
+# Constants for retry logic
+MAX_RETRIES = 5
+INITIAL_RETRY_DELAY = 1  # seconds
 
 def get_google_drive_service():
     """Gets an authorized Google Drive service instance."""
@@ -35,6 +41,20 @@ def get_google_drive_service():
 
     return build('drive', 'v3', credentials=creds)
 
+def execute_with_retry(request):
+    """Execute a Drive API request with exponential backoff retry logic."""
+    for retry in range(MAX_RETRIES):
+        try:
+            return request.execute()
+        except (TimeoutError, HttpError) as e:
+            if retry == MAX_RETRIES - 1:
+                raise e
+            
+            delay = INITIAL_RETRY_DELAY * (2 ** retry)  # Exponential backoff
+            print(f"Request failed, retrying in {delay} seconds...")
+            time.sleep(delay)
+    return None
+
 def copy_folder(service, source_folder_id, parent_id=None, is_root=True):
     """
     Recursively copies a folder and its contents.
@@ -48,8 +68,9 @@ def copy_folder(service, source_folder_id, parent_id=None, is_root=True):
     """
     try:
         # Get source folder metadata
-        folder_metadata = service.files().get(
-            fileId=source_folder_id, fields='name').execute()
+        folder_metadata = execute_with_retry(
+            service.files().get(fileId=source_folder_id, fields='name')
+        )
         
         # Create new folder
         new_folder = {
@@ -59,14 +80,19 @@ def copy_folder(service, source_folder_id, parent_id=None, is_root=True):
         if parent_id:
             new_folder['parents'] = [parent_id]
         
-        new_folder = service.files().create(
-            body=new_folder, fields='id').execute()
+        new_folder = execute_with_retry(
+            service.files().create(body=new_folder, fields='id')
+        )
         new_folder_id = new_folder['id']
         
         # List all files in the source folder
-        results = service.files().list(
-            q=f"'{source_folder_id}' in parents",
-            fields="files(id, name, mimeType)").execute()
+        results = execute_with_retry(
+            service.files().list(
+                q=f"'{source_folder_id}' in parents",
+                fields="files(id, name, mimeType)",
+                pageSize=1000
+            )
+        )
         items = results.get('files', [])
         
         # Copy each item in the folder
@@ -80,13 +106,14 @@ def copy_folder(service, source_folder_id, parent_id=None, is_root=True):
                     'name': item['name'],
                     'parents': [new_folder_id]
                 }
-                service.files().copy(
-                    fileId=item['id'],
-                    body=copied_file).execute()
+                execute_with_retry(
+                    service.files().copy(fileId=item['id'], body=copied_file)
+                )
+                print(f"Copied file: {item['name']}")
         
         return new_folder_id
     
-    except HttpError as error:
+    except Exception as error:
         print(f'An error occurred: {error}')
         return None
 
